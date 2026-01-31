@@ -1,5 +1,6 @@
 package net.henkdude.sophisticatedbackpackspickblockupgrade;
 
+import net.henkdude.sophisticatedbackpackspickblockupgrade.registry.ModCreativeModeTabs;
 import net.henkdude.sophisticatedbackpackspickblockupgrade.registry.ModItems;
 import net.henkdude.sophisticatedbackpackspickblockupgrade.registry.ModNetworking;
 import net.neoforged.bus.api.IEventBus;
@@ -16,10 +17,12 @@ public class SophisticatedBackpacksPickBlockUpgrade {
 
     public SophisticatedBackpacksPickBlockUpgrade(IEventBus modEventBus, ModContainer modContainer) {
         ModItems.register(modEventBus);
+        ModCreativeModeTabs.register(modEventBus);
 
         modEventBus.addListener(this::commonSetup);
 
     }
+
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         // nothing yet

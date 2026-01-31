@@ -6,6 +6,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -14,59 +15,33 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
-import net.minecraft.world.item.Items;
-import net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackItem;
 
-
-@EventBusSubscriber(modid = SophisticatedBackpacksPickBlockUpgrade.MODID, bus = EventBusSubscriber.Bus.GAME, value = Dist.CLIENT)
+@EventBusSubscriber(
+        modid = SophisticatedBackpacksPickBlockUpgrade.MODID,
+        bus = EventBusSubscriber.Bus.GAME,
+        value = Dist.CLIENT
+)
 public final class ClientPickBlockHandler {
 
-    private static boolean wasDown = false;
-
     @SubscribeEvent
-    public static void onClientTick(ClientTickEvent.Post event) {
+    public static void onClientTick(ClientTickEvent.Pre event) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
         if (mc.screen != null) return;
 
-        // hitResult is not guaranteed to be non-null every tick
-        if (mc.hitResult == null) return;
+        // Fires once per press
+        if (!mc.options.keyPickItem.consumeClick()) return;
 
-        boolean down = mc.options.keyPickItem.isDown();
-        if (down && !wasDown) {
-            HitResult hit = mc.hitResult;
+        HitResult hit = mc.hitResult;
+        if (!(hit instanceof BlockHitResult bhr) || hit.getType() != HitResult.Type.BLOCK) return;
 
-            if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult bhr) {
+        Block block = mc.level.getBlockState(bhr.getBlockPos()).getBlock();
+        Item wanted = block.asItem();
+        if (wanted == null || wanted == Items.AIR) return;
 
-                // Don't do anything if player has no Sophisticated Backpacks at all
-                boolean hasAnyBackpack = false;
-                for (var s : mc.player.getInventory().items) {
-                    if (!s.isEmpty() && s.getItem() instanceof BackpackItem) {
-                        hasAnyBackpack = true;
-                        break;
-                    }
-                }
-                if (!hasAnyBackpack) {
-                    wasDown = down;
-                    return;
-                }
+        ResourceLocation id = BuiltInRegistries.ITEM.getKey(wanted);
+        if (id == null) return;
 
-                Block block = mc.level.getBlockState(bhr.getBlockPos()).getBlock();
-                Item wanted = block.asItem();
-
-                // asItem() can be AIR for blocks without an item form
-                if (wanted == Items.AIR) {
-                    wasDown = down;
-                    return;
-                }
-
-                ResourceLocation id = BuiltInRegistries.ITEM.getKey(wanted);
-                PacketDistributor.sendToServer(new C2SRequestPickBlock(id));
-            }
-        }
-
-        wasDown = down;
+        PacketDistributor.sendToServer(new C2SRequestPickBlock(id));
     }
-
-
 }

@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "SDS",
+    "GBG",
+    "DDD"
+  ],
+  "key": {
+    "D": { "item": "minecraft:diamond" },
+    "G": { "item": "minecraft:gold_ingot" },
+    "B": { "item": "sophisticatedbackpacks:upgrade_base" },
+    "S": { "item": "minecraft:stick" }
+  },
+  "result": {
+    "id": "sophisticated_backpacks_pick_block_upgrade:pick_block_upgrade",
+    "count": 1
+  }
+}

@@ -1,176 +1,175 @@
 package net.henkdude.sophisticatedbackpackspickblockupgrade.network;
 
 import net.henkdude.sophisticatedbackpackspickblockupgrade.SophisticatedBackpacksPickBlockUpgrade;
-import net.henkdude.sophisticatedbackpackspickblockupgrade.registry.ModItems;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.neoforge.items.IItemHandler;
 import net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackItem;
 import net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.BackpackWrapper;
-import net.p3pp3rf1y.sophisticatedcore.inventory.InventoryHandler;
+import net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.IBackpackWrapper;
+import net.p3pp3rf1y.sophisticatedcore.upgrades.IUpgradeItem;
+import top.theillusivec4.curios.api.CuriosApi;
 
-public record C2SRequestPickBlock(ResourceLocation itemId) implements net.minecraft.network.protocol.common.custom.CustomPacketPayload {
+import java.util.ArrayList;
+import java.util.List;
+
+public record C2SRequestPickBlock(ResourceLocation itemId) implements CustomPacketPayload {
 
     public static final Type<C2SRequestPickBlock> TYPE =
-            new Type<>(ResourceLocation.fromNamespaceAndPath(SophisticatedBackpacksPickBlockUpgrade.MODID, "pick_block"));
+            new Type<>(ResourceLocation.fromNamespaceAndPath(
+                    SophisticatedBackpacksPickBlockUpgrade.MODID, "pick_block"
+            ));
+
+    /** ResourceLocation codec for NeoForge 1.21.x */
+    public static final StreamCodec<RegistryFriendlyByteBuf, ResourceLocation> RL_CODEC =
+            StreamCodec.of(
+                    (buf, rl) -> buf.writeResourceLocation(rl),   // encoder: (B, V) -> void
+                    RegistryFriendlyByteBuf::readResourceLocation // decoder: (B) -> V
+            );
 
     public static final StreamCodec<RegistryFriendlyByteBuf, C2SRequestPickBlock> STREAM_CODEC =
             StreamCodec.composite(
-                    ResourceLocation.STREAM_CODEC, C2SRequestPickBlock::itemId,
+                    RL_CODEC,
+                    C2SRequestPickBlock::itemId,
                     C2SRequestPickBlock::new
             );
 
     @Override
-    public Type<C2SRequestPickBlock> type() {
+    public Type<? extends CustomPacketPayload> type() {
         return TYPE;
     }
+
+    /* ========================= SERVER HANDLER ========================= */
 
     public static void handle(C2SRequestPickBlock msg, ServerPlayer player) {
         if (player == null) return;
 
-        Item wantedItem = BuiltInRegistries.ITEM.get(msg.itemId());
-        if (wantedItem == null) return;
+        Item wanted = BuiltInRegistries.ITEM.get(msg.itemId());
+        if (wanted == null) return;
 
-        // Find a backpack in player's inventory that has our upgrade installed
-        ItemStack backpackStack = findFirstUpgradedBackpack(player);
-        if (backpackStack.isEmpty()) return;
+        List<ItemStack> backpacks = new ArrayList<>();
 
-        BackpackWrapper wrapper = (BackpackWrapper) BackpackWrapper.fromStack(backpackStack);
-        InventoryHandler backpackInv = wrapper.getInventoryHandler();
-
-        int request = Math.min(64, wantedItem.getDefaultInstance().getMaxStackSize());
-        if (request <= 0) return;
-
-        int slot = findBestSlotFor(backpackInv, wantedItem, request);
-        if (slot == -1) return;
-
-        ItemStack extracted = backpackInv.extractItem(slot, request, false);
-        if (extracted.isEmpty()) return;
-
-        // Try to place into main hand / hotbar in a sane way
-        placeIntoHandOrHotbar(player, extracted);
-    }
-
-    private static ItemStack findFirstUpgradedBackpack(ServerPlayer player) {
-        // main inventory
-        for (ItemStack stack : player.getInventory().items) {
-            if (isUpgradedBackpack(stack)) return stack;
+        /* ---------- inventory ---------- */
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            ItemStack s = player.getInventory().getItem(i);
+            if (s.getItem() instanceof BackpackItem) backpacks.add(s);
         }
-        // hotbar/offhand
-        for (ItemStack stack : player.getInventory().offhand) {
-            if (isUpgradedBackpack(stack)) return stack;
-        }
-        // armor slots (just in case)
+
+        /* ---------- armor / offhand ---------- */
         for (EquipmentSlot slot : EquipmentSlot.values()) {
-            if (!slot.isArmor()) continue;
-            ItemStack stack = player.getItemBySlot(slot);
-            if (isUpgradedBackpack(stack)) return stack;
+            ItemStack s = player.getItemBySlot(slot);
+            if (s.getItem() instanceof BackpackItem) backpacks.add(s);
         }
-        return ItemStack.EMPTY;
+
+        /* ---------- curios ---------- */
+        CuriosApi.getCuriosInventory(player).ifPresent(curios ->
+                curios.getCurios().forEach((id, handler) -> {
+                    for (int i = 0; i < handler.getSlots(); i++) {
+                        ItemStack s = handler.getStacks().getStackInSlot(i);
+                        if (s.getItem() instanceof BackpackItem) backpacks.add(s);
+                    }
+                })
+        );
+
+        /* ---------- try each backpack ---------- */
+        for (ItemStack backpackStack : backpacks) {
+            IBackpackWrapper wrapper = BackpackWrapper.fromStack(backpackStack); // <-- returns IBackpackWrapper
+            if (!hasPickBlockUpgrade(wrapper)) continue;
+
+            ItemStack extracted = extractBestStack(wrapper, wanted, 64);
+            if (extracted.isEmpty()) continue;
+
+            giveToPlayer(player, extracted);
+            return;
+        }
     }
 
-    private static boolean isUpgradedBackpack(ItemStack stack) {
-        if (stack.isEmpty()) return false;
-        if (!(stack.getItem() instanceof BackpackItem)) return false;
+    /* ========================= HELPERS ========================= */
 
-        BackpackWrapper wrapper = (BackpackWrapper) BackpackWrapper.fromStack(stack);
+    private static boolean hasPickBlockUpgrade(IBackpackWrapper wrapper) {
         var upgrades = wrapper.getUpgradeHandler();
         for (int i = 0; i < upgrades.getSlots(); i++) {
             ItemStack up = upgrades.getStackInSlot(i);
-            if (!up.isEmpty() && up.is(ModItems.PICK_BLOCK_UPGRADE.get())) {
+            if (up.isEmpty()) continue;
+
+            ResourceLocation id = BuiltInRegistries.ITEM.getKey(up.getItem());
+            if (id != null
+                    && id.getNamespace().equals(SophisticatedBackpacksPickBlockUpgrade.MODID)
+                    && id.getPath().equals("pick_block_upgrade")
+                    && up.getItem() instanceof IUpgradeItem<?>) {
                 return true;
             }
         }
         return false;
     }
 
-    // Priority:
-    // 1) Slot that can provide a full request (>= request), prefer largest count
-    // 2) Otherwise slot with the largest count
-    private static int findBestSlotFor(IItemHandler inv, Item wanted, int request) {
-        int bestSlot = -1;
-        int bestCount = -1;
+    private static ItemStack extractBestStack(IBackpackWrapper wrapper, Item wanted, int target) {
+        var inv = wrapper.getInventoryHandler();
 
         int bestFullSlot = -1;
         int bestFullCount = -1;
-
-        ItemStack wantedProbe = wanted.getDefaultInstance();
+        int bestAnySlot = -1;
+        int bestAnyCount = -1;
 
         for (int i = 0; i < inv.getSlots(); i++) {
             ItemStack s = inv.getStackInSlot(i);
-            if (s.isEmpty()) continue;
-            if (!ItemStack.isSameItemSameComponents(s, wantedProbe)) continue;
+            if (s.isEmpty() || s.getItem() != wanted) continue;
 
-            int count = s.getCount();
-
-            if (count >= request) {
-                if (count > bestFullCount) {
-                    bestFullCount = count;
-                    bestFullSlot = i;
-                }
+            int c = s.getCount();
+            if (c >= target && c > bestFullCount) {
+                bestFullCount = c;
+                bestFullSlot = i;
             }
-
-            if (count > bestCount) {
-                bestCount = count;
-                bestSlot = i;
+            if (c > bestAnyCount) {
+                bestAnyCount = c;
+                bestAnySlot = i;
             }
         }
 
-        return bestFullSlot != -1 ? bestFullSlot : bestSlot;
+        int slot = bestFullSlot != -1 ? bestFullSlot : bestAnySlot;
+        if (slot == -1) return ItemStack.EMPTY;
+
+        ItemStack src = inv.getStackInSlot(slot);
+        int take = Math.min(target, src.getCount());
+
+        ItemStack out = src.copy();
+        out.setCount(take);
+
+        src.shrink(take);
+        inv.setStackInSlot(slot, src);
+
+        return out;
     }
 
-    private static void placeIntoHandOrHotbar(ServerPlayer player, ItemStack extracted) {
+    private static void giveToPlayer(ServerPlayer player, ItemStack stack) {
         var inv = player.getInventory();
-        int max = extracted.getMaxStackSize();
-
-        // 1) If main hand same item, top it up
-        ItemStack hand = player.getMainHandItem();
-        if (!hand.isEmpty() && ItemStack.isSameItemSameComponents(hand, extracted) && hand.getCount() < max) {
-            int space = max - hand.getCount();
-            int move = Math.min(space, extracted.getCount());
-            hand.grow(move);
-            extracted.shrink(move);
-            if (extracted.isEmpty()) return;
-        }
-
-        // 2) If hotbar has same item stack with space, top that up
-        for (int i = 0; i < 9 && !extracted.isEmpty(); i++) {
-            ItemStack hot = inv.getItem(i);
-            if (!hot.isEmpty() && ItemStack.isSameItemSameComponents(hot, extracted) && hot.getCount() < max) {
-                int space = max - hot.getCount();
-                int move = Math.min(space, extracted.getCount());
-                hot.grow(move);
-                extracted.shrink(move);
-            }
-        }
-        if (extracted.isEmpty()) return;
-
-        // 3) If selected slot empty, put it there
         int sel = inv.selected;
-        ItemStack selStack = inv.getItem(sel);
-        if (selStack.isEmpty()) {
-            inv.setItem(sel, extracted);
-            return;
+
+        ItemStack hand = inv.getItem(sel);
+        if (!hand.isEmpty()
+                && ItemStack.isSameItemSameComponents(hand, stack)
+                && hand.getCount() < hand.getMaxStackSize()) {
+
+            int move = Math.min(hand.getMaxStackSize() - hand.getCount(), stack.getCount());
+            hand.grow(move);
+            stack.shrink(move);
         }
 
-        // 4) Otherwise, try empty hotbar slot
-        for (int i = 0; i < 9; i++) {
-            if (inv.getItem(i).isEmpty()) {
-                inv.setItem(i, extracted);
-                return;
-            }
+        if (!stack.isEmpty() && inv.getItem(sel).isEmpty()) {
+            inv.setItem(sel, stack);
+            stack = ItemStack.EMPTY;
         }
 
-        // 5) Otherwise, add to inventory; if it doesn't fit, drop remainder
-        ItemStack remaining = inv.add(extracted) ? ItemStack.EMPTY : extracted;
-        if (!remaining.isEmpty()) {
-            player.drop(remaining, false);
+        if (!stack.isEmpty() && !inv.add(stack)) {
+            player.drop(stack, false);
         }
+
+        player.inventoryMenu.broadcastChanges();
     }
 }

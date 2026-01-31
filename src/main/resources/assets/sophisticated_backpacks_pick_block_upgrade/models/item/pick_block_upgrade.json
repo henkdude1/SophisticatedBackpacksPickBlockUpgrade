@@ -1,6 +1,6 @@
 {
   "parent": "minecraft:item/generated",
   "textures": {
-    "layer0": "minecraft:item/ender_pearl"
+    "layer0": "sophisticated_backpacks_pick_block_upgrade:item/pick_block_upgrade"
   }
 }
